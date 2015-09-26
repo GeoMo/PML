@@ -1,0 +1,194 @@
+---
+title: "Practical Machine Learning"
+author: "GeoMo"
+date: "Saturday, September 26, 2015"
+output: html_document
+---
+
+```{r load, echo=FALSE, message=F, warning=F}
+## a clean environment
+rm(list=ls())
+
+## load libraries
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(Hmisc)
+```
+
+## Executive summary
+
+In this project we build a machine learning model to predicting in which of 5 different ways the exercise was performed. Accelerometers were placed on the belt,forearm, arm and dumbell of 6 participants. 
+
+The final model, random forest, generates predictions with an accuracy of 99.3%.  This model was used to generate 20 files with predictions to submit for assignment.
+
+## Summary of data
+
+The training data for this project are available here: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here:  <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+The data for this project comes from this original source: <http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf>.
+The 'classe' varaible 5 labels are (Class A) - according to the specification , 
+(Class B) - throwing the elbows to the front , (Class C) - lifting the dumbbell only halfway , (Class D) - lowering the dumbbell only halfway, (Class E) - throwing the hips to the front . 
+
+```{r , results='hide'}
+## Read files
+### NA, #DIV/0!, sep ","
+training = read.csv("training.csv", na.strings=c("NA","#DIV/0!",""))
+testing = read.csv("test.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+Splitting training set into a smaller training set and cross-validation set
+```{r , results='hide'}
+set.seed(1234)
+inTrain <- createDataPartition(y=training$classe, p=0.8, list=FALSE)
+gtraining <- training[inTrain, ]; gtesting <- training[-inTrain, ]
+dim(gtraining); dim(gtesting)
+```
+
+## Data Exploring and Cleaning
+
+Through exploratory data analysis we inspect the data in order to identify important/ unimportant variables, cases and variables with missing values which are not useful for building a classification model.
+
+1.**Data structure** 
+
+```{r , results='hide'}
+str(training)
+table(training$classe)
+## %
+prop.table(table(training$classe))*100
+```
+
+2.**Missing values** 
+
+```{r , results='hide'}
+# now we see the number of missing values in columns
+colSums(is.na(gtraining))
+NonNAIndex <- which(colSums(is.na(gtraining)) > 0) 
+RemoveNA <- gtraining[ ,-NonNAIndex]
+dim(RemoveNA)
+## [1] 15699    60
+```
+
+
+3. **Removing the first 7 variables** because they are no useful for prediction model.
+
+```{r}
+gnewTraining <- RemoveNA[,-c(1:7)]
+dim(gnewTraining)
+```
+
+
+4. **Removing Near Zero variance** checking if all columns have close to zero variance, the saveMetric provide heuristic information of each column which is REALLY useful
+
+```{r, results='hide'}
+Nzv <- nearZeroVar(gnewTraining,saveMetrics=TRUE) 
+Nzv # all false
+Nzv <- nearZeroVar(gnewTraining,saveMetrics=FALSE) 
+# columns to be removed gnewTraining <- gnewTraining[ ,-Nzv]
+```
+
+
+
+5. **cross validation data and testing data transformation** we do the exact same 3 transformations for our crossvalidation and testing data sets: 
+
+
+```{r }
+clean1 <- colnames(gnewTraining)
+clean2 <- colnames(gnewTraining[, -53]) # classe column removed
+gtesting <- gtesting[clean1]
+testing <- testing[clean2]
+clean1
+clean2
+#To check the new Nº of observations
+dim(gtesting)
+#To check the new Nº of observations
+dim(testing)
+```
+
+## Model Selection
+In order to ensure proper functioning of RandomForest Algorithm with data set provided, we need to coerce the data into the same type.Classe must be a factor variable.Columns are transformed into numeric data. 
+
+```{r}
+for(i in c(2:ncol(gnewTraining)-1)) {
+        gnewTraining[,i] = as.numeric(as.character(gnewTraining[,i]))
+        gtesting[,i] = as.numeric(as.character(gtesting[,i]))
+}
+
+str(gnewTraining)
+```
+
+A Random Forest model was chosen for this classification problem because is one of the most used/accurate algorithms and well suited to handle a large number of inputs (52 input predictors). A random forest can be used to estimate variable importance. 
+
+Below we have fit a random forest using parallel cores to reduce computation time.  The "mtry" variable is the number of features that are randomly chosen at each node for each bootstrapped decision tree. 
+
+```{r}
+set.seed(1234)
+model <- train(classe ~ .,
+                data=gnewTraining, 
+                method='rf', 
+                trControl=trainControl(method="cv", 
+                                       number=4, 
+                                       allowParallel=TRUE, 
+                                       verboseIter=TRUE)) # Random Forest
+
+model
+pred_rf <- predict(model,gtesting)
+
+cm_rf <- confusionMatrix(pred_rf,gtesting$classe)
+cm_rf
+
+plot(model)
+plot(varImp(model))
+```
+
+
+Maximum accuracy for the random forest model at mtry = 27.
+A confusion matrix for the validation set is shown above.
+The accuracy of the model is 0.9936. The out of sample error is 0.0064. 
+The out of sample error is calculated as 1 - accuracy for predictions 
+made against the cross-validation set. The accuracy generated by the random forest model call (99.3%) is an out-of-bag error rate so technically an additional cross validation isn't necessary 
+<http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr>. 
+
+                                                      
+Below we have made a function call to varImp() in the caret package. 
+This shows the importance of each variable. 
+
+Roll Belt and Yaw Belt are the most important variables in the dataset.
+ 
+ 
+# Apply to 
+```{r}
+# Apply to testing data
+prediction_rf <- predict(model,testing)
+prediction_rf
+```
+
+#[1] B A B A A E D B A A B C B A E E A B B B
+
+
+Function to generate **files with predictions to submit** for assignment:
+
+```{r}
+pml_write_files <- function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+pml_write_files(prediction_rf)
+```
+
+
+## CONCLUSION
+ 
+
+Applying the random forest model to predict the 20 test cases from the 
+Submission portion of the Course Project resulted in a 100% classification rate.
+
